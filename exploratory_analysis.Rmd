@@ -1,0 +1,361 @@
+---
+title: "exploratory_analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data
+
+```{r load_libraries}
+
+library(tidyverse)
+library(lubridate)
+library(timetk)
+library(tidymodels)
+library(modeltime)
+library(here)
+
+```
+
+```{r load_data}
+
+analysis <- read_csv(here("data", "train.csv"))
+holdout <- read_csv(here("data", "test.csv"))
+stores <- read_csv(here("data", "stores.csv"))
+transactions <- read_csv(here("data", "transactions.csv"))
+holidays <- read_csv(here("data", "holidays_events.csv"))
+oil <- read_csv(here("data", "oil.csv"))
+
+```
+
+Let's check the distribution of sales by family of products
+
+```{r histograms}
+
+analysis %>% 
+  group_by(date, family) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  ggplot(aes(x = log1p(sales))) + 
+  geom_histogram() + 
+  facet_wrap(facets = "family", ncol = 5, scales = "free")
+
+analysis %>% 
+  # filter(family == "BABY CARE") %>%
+  # filter(family == "PRODUCE") %>%
+  # filter(family == "LADIESWEAR") %>%
+  # filter(family == "CELEBRATION") %>%
+  # filter(family == "BOOKS") %>%
+  # filter(family == "MAGAZINES") %>%
+  # filter(family == "LIQUOR,WINE,BEER") %>%
+  # filter(family == "HOME AND KITCHEN II") %>%
+  # filter(family == "HOME AND KITCHEN I") %>%
+  # filter(family == "HOME CARE") %>%
+  # filter(family == "PET SUPPLIES") %>%
+  # filter(family == "PLAYERS AND ELECTRONICS") %>%
+  filter(family == "SCHOOL AND OFFICE SUPPLIES") %>%
+  group_by(date) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  plot_time_series(.date_var = date, .value = sales, 
+                   # .color_var = store_nbr, 
+                   .smooth = FALSE
+                   # .facet_vars = family, .facet_ncol = 4
+                   )
+
+```
+
+```{r}
+
+analysis %>% 
+  group_by(date, family) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  plot_stl_diagnostics(
+    .date_var = date, 
+    .value = sales, 
+    .feature_set = "season", 
+    .facet_vars = family, 
+    .facet_scales = "free", 
+    .interactive = FALSE,
+    
+  )
+
+seasons <- analysis %>% 
+  group_by(date, family) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  group_by(family) %>% 
+  tk_stl_diagnostics(
+    .date_var = date, 
+    .value = sales
+  ) %>% 
+  ungroup()
+  
+library(plotly)
+
+ggplotly(
+seasons %>% 
+  ggplot(aes(x = date, y = season)) + 
+  geom_line() + 
+  facet_wrap("family", ncol = 5, scales = "free")
+)
+
+```
+
+
+#### Oil Notes
+
+There's a downward trend throughout the years
+Small seasonality across quarters
+There are missing values that need to be filled in
+Not all dates are present, padding is required
+PACF is mostly white noise after 1st lag
+Since not much of a seasonal component maybe just linear interpolation??
+Seasonality of the Liquor business with a day per week being 0 sales
+
+```{r}
+
+oil %>% 
+  plot_time_series(.date_var = date, .value = dcoilwtico)
+
+oil %>% 
+  filter(!is.na(dcoilwtico)) %>% 
+  plot_stl_diagnostics(.date_var = date, 
+                       .value = dcoilwtico#, 
+                       # .frequency = "1 quarter"
+                       )
+
+test1 <- oil %>% 
+  filter(!is.na(dcoilwtico)) %>% 
+  tk_stl_diagnostics(.date_var = date, .value = dcoilwtico, 
+                     )
+test2 <- oil %>% 
+  filter(!is.na(dcoilwtico)) %>% 
+  tk_stl_diagnostics(.date_var = date, .value = dcoilwtico, 
+                     .frequency = "1 quarter"
+                     ) 
+
+oil %>% 
+  filter(!is.na(dcoilwtico)) %>%
+  plot_seasonal_diagnostics(.date_var = date, .value = dcoilwtico)
+
+oil %>% 
+  mutate(dcoilwtico = ts_impute_vec(dcoilwtico, period = 1)) %>% 
+  View()
+
+```
+
+#### Sales Notes
+
+Produce across all stores have massive dips for particular dates, same across stores
+Same for ladieswear, pet supplies, home_care, celebration, players and electronics
+For baby care, magazines and books there are similar drops but not entirely overlapping for all periods.
+Also Home and Kitchen I and II.
+Maybe consider multiple indicators, one for each of the periods
+Christmas day is missing from all years, assume shops closed
+Lags 1-8 seem important and then also the weekly lags, 14, 21, 28, 35, 42
+Maybe also 1-15 and the ones around the weekly lags -+1
+
+```{r}
+
+analysis %>% 
+  filter(family == "PRODUCE") %>%
+  # filter(family == "LADIESWEAR") %>%
+  # filter(family == "CELEBRATION") %>%
+  # filter(family == "BOOKS") %>%
+  # filter(family == "MAGAZINES") %>%
+  group_by(date) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  plot_time_series(.date_var = date, .value = sales, 
+                   # .color_var = store_nbr, 
+                   .smooth = FALSE
+                   # .facet_vars = family, .facet_ncol = 4
+                   )
+
+# dates missing?
+
+date_ind <- tk_make_timeseries(
+  start_date = "2013-01-01", 
+  end_date = "2017-08-15", 
+  by = "day"
+)
+
+dates <- analysis %>% pull(date) %>% unique()
+
+setdiff(as.character(date_ind), as.character(dates))
+
+```
+
+
+```{r}
+
+analysis %>% 
+  filter_by_time(
+    .date_var = date,
+    .start_date = "2015-12-25", 
+    .end_date = "2015-12-28"
+  )
+
+analysis %>% 
+  group_by(date) %>% 
+  summarise(sales = sum(sales)) %>% 
+  plot_time_series(.date_var = date, .value = sales, .smooth = FALSE)
+
+```
+
+```{r}
+
+analysis %>% 
+  filter(family == "GROCERY I", store_nbr == 10) %>%
+  # group_by(store_nbr) %>% 
+  plot_acf_diagnostics(
+    .date_var = date,
+    .value = sales, 
+    .lags = 1000
+  )
+
+analysis %>% 
+  filter(family == "GROCERY I", store_nbr == 10) %>%
+  # group_by(store_nbr) %>% 
+  plot_seasonal_diagnostics(.date_var = date, .value = sales, 
+                   # .color_var = store_nbr, 
+                   # .smooth = FALSE
+                   # .facet_vars = family, .facet_ncol = 4
+                   )
+
+```
+
+```{r}
+
+analysis %>% pull(family) %>% unique()
+
+```
+
+#### Promotions
+
+```{r}
+
+analysis %>% 
+  filter(family == "GROCERY I", store_nbr == 10) %>% 
+  group_by(date) %>% 
+  summarise(sales = sum(sales), promotions = sum(onpromotion)) %>% 
+  plot_acf_diagnostics(
+    .date_var = date, 
+    .value = sales, 
+    .ccf_vars = promotions, 
+    .show_ccf_vars_only = TRUE
+    )
+
+analysis %>% 
+  filter(family == "GROCERY I", store_nbr == 10) %>% 
+  rename(promotion = onpromotion) %>% 
+  tk_augment_lags(.value = promotion, .lags = 1:42) %>% 
+  select(-c(id, store_nbr, family)) %>% 
+  lm(sales ~ . -date, data = .) %>% 
+  tidy() %>% View()
+
+analysis %>% 
+  filter(family == "GROCERY I", store_nbr == 10) %>% 
+  group_by(date) %>% 
+  summarise(sales = sum(sales), promotions = sum(onpromotion)) %>% 
+  plot_acf_diagnostics(
+    .date_var = date, 
+    .value = promotions
+    )
+
+analysis %>% 
+  group_by(family) %>% 
+  summarise(min_prom = min(onpromotion), 
+            median_prom = median(onpromotion), 
+            mean_prom = mean(onpromotion), 
+            max_prom = max(onpromotion), 
+            .groups = "drop"
+            ) %>% View()
+
+```
+
+
+#### Special considerations
+
+Wages in the public sector are paid every two weeks on the 15 th and on the last day of the month. Supermarket sales could be affected by this.
+A magnitude 7.8 earthquake struck Ecuador on April 16, 2016. People rallied in relief efforts donating water and other first need products which greatly affected supermarket sales for several weeks after the earthquake. 
+
+```{r}
+
+analysis %>% 
+  filter(family == "HOME CARE") %>%
+  group_by(date) %>% 
+  summarise(sales = sum(sales)) %>% 
+  plot_time_series(
+    .date_var = date,
+    .value = sales
+  )
+
+```
+
+
+
+#### Combine data
+
+```{r merger}
+
+national_holidays <- holidays %>% 
+  filter(locale == "National", !transferred) %>% 
+  mutate(national_holiday = 1) %>% 
+  select(date, national_holiday) %>% 
+  unique()
+
+local_holidays <- holidays %>% 
+  filter(locale == "Local", !transferred) %>% 
+  mutate(local_holiday = 1) %>% 
+  select(date, local_holiday, locale_name) %>% 
+  unique()
+
+regional_holidays <- holidays %>% 
+  filter(locale == "Regional", !transferred) %>% 
+  mutate(regional_holiday = 1) %>% 
+  select(date, regional_holiday, locale_name) %>% 
+  unique()
+
+oil <- oil %>% 
+  pad_by_time(.date_var = date, .by = "day") %>% 
+  mutate(dcoilwtico = ts_impute_vec(dcoilwtico, period = 1))
+
+sudden_drop <- analysis %>% 
+  filter(family == "PRODUCE") %>% 
+  group_by(date) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  mutate(sudden_drop = ifelse(sales < 5000, 1, 0)) %>% 
+  select(date, sudden_drop)
+
+payday <- analysis %>% 
+  select(date) %>% 
+  unique() %>% 
+  mutate(day_num = day(date), 
+         month_end = days_in_month(date), 
+         payday = ifelse(day_num == 15 | day_num == month_end, 1, 0)
+         ) %>% 
+  select(date, payday)
+
+analysis_merged <- analysis %>% 
+  left_join(stores, by = "store_nbr") %>% 
+  left_join(national_holidays, 
+            by = c("date" = "date")) %>% 
+  left_join(local_holidays, 
+            by = c("date" = "date", 
+                   "city" = "locale_name")) %>% 
+  left_join(regional_holidays, 
+            by = c("date" = "date", 
+                   "state" = "locale_name")) %>% 
+  replace_na(replace = list(local_holiday = 0, 
+                            regional_holiday = 0, 
+                            national_holiday = 0)) %>% 
+  mutate(holiday = ifelse(local_holiday + regional_holiday + national_holiday > 0, 1, 0)) %>% 
+  left_join(oil, by = "date") %>% 
+  left_join(sudden_drop, by = "date") %>% 
+  left_join(payday, by = "date") %>% 
+  mutate(id = paste0(store_nbr, "__", family))
+  
+
+```
+

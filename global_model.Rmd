@@ -1,0 +1,291 @@
+---
+title: "global_model"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data
+
+```{r load_libraries}
+
+library(tidyverse)
+library(lubridate)
+library(timetk)
+library(tidymodels)
+library(modeltime)
+library(workflowsets)
+library(here)
+
+```
+
+```{r load_data}
+
+analysis <- read_csv(here("data", "train.csv"))
+holdout <- read_csv(here("data", "test.csv"))
+stores <- read_csv(here("data", "stores.csv"))
+transactions <- read_csv(here("data", "transactions.csv"))
+holidays <- read_csv(here("data", "holidays_events.csv"))
+oil <- read_csv(here("data", "oil.csv"))
+
+```
+
+```{r merger}
+
+data <- bind_rows(analysis, holdout) %>% 
+  mutate(id = paste0(store_nbr, "__", family))
+
+lag_function <- function(data) {
+  
+  data %>% 
+    # group_by(id) %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = 1:15
+    ) #%>% 
+    # ungroup()
+  
+}
+
+lag_group_function <- function(data) {
+  
+  data %>% 
+    group_by(id) %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = 1:15
+    ) %>% 
+    ungroup()
+  
+}
+
+national_holidays <- holidays %>% 
+  filter(locale == "National", !transferred) %>% 
+  mutate(national_holiday = 1) %>% 
+  select(date, national_holiday) %>% 
+  unique()
+
+local_holidays <- holidays %>% 
+  filter(locale == "Local", !transferred) %>% 
+  mutate(local_holiday = 1) %>% 
+  select(date, local_holiday, locale_name) %>% 
+  unique()
+
+regional_holidays <- holidays %>% 
+  filter(locale == "Regional", !transferred) %>% 
+  mutate(regional_holiday = 1) %>% 
+  select(date, regional_holiday, locale_name) %>% 
+  unique()
+
+oil <- oil %>% 
+  pad_by_time(.date_var = date, .by = "day") %>% 
+  mutate(dcoilwtico = ts_impute_vec(dcoilwtico, period = 1))
+
+# sudden_drop <- data %>% 
+#   filter(family == "PRODUCE") %>% 
+#   group_by(date) %>% 
+#   summarise(sales = sum(sales), .groups = "drop") %>% 
+#   mutate(sudden_drop = ifelse(sales < 5000 | is.na(sales), 1, 0)) %>% 
+#   select(date, sudden_drop)
+
+sudden_drop <- data %>% 
+  select(date) %>% 
+  unique() %>% 
+  mutate(sudden_drop_1 = ifelse(date < as.Date("2014-03-01"), 1, 0), 
+         sudden_drop_2 = ifelse(date >= as.Date("2014-04-01") & date < as.Date("2014-07-01"), 1, 0), 
+         sudden_drop_3 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-03-31"), 1, 0), 
+         sudden_drop_4 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-03"), 1, 0), 
+         sudden_drop_5 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-31"), 1, 0), 
+         sudden_drop_6 = ifelse(date >= as.Date("2014-04-01") & date <= as.Date("2014-06-30"), 1, 0), 
+
+         sudden_drop_2014_feb = ifelse(date >= as.Date("2014-02-01") & date <= as.Date("2014-02-28"), 1, 0), 
+         sudden_drop_2014_aug = ifelse(date >= as.Date("2014-08-01") & date <= as.Date("2014-08-31"), 1, 0), 
+         
+         sudden_drop_2014_nyd = ifelse(date == as.Date("2014-01-01"), 1, 0), 
+         sudden_drop_2015_nyd = ifelse(date == as.Date("2015-01-01"), 1, 0), 
+         sudden_drop_2016_nyd = ifelse(date == as.Date("2016-01-01"), 1, 0), 
+         sudden_drop_2017_nyd = ifelse(date == as.Date("2017-01-01"), 1, 0), 
+         
+         sudden_drop_books = ifelse(date <= as.Date("2016-10-07"), 1, 0)
+         )
+
+payday <- data %>% 
+  select(date) %>% 
+  unique() %>% 
+  mutate(day_num = day(date), 
+         month_end = days_in_month(date), 
+         payday = ifelse(day_num == 15 | day_num == month_end, 1, 0)
+         ) %>% 
+  select(date, payday)
+
+data_merged <- data %>% 
+  left_join(stores, by = "store_nbr") %>% 
+  left_join(national_holidays, 
+            by = c("date" = "date")) %>% 
+  left_join(local_holidays, 
+            by = c("date" = "date", 
+                   "city" = "locale_name")) %>% 
+  left_join(regional_holidays, 
+            by = c("date" = "date", 
+                   "state" = "locale_name")) %>% 
+  replace_na(replace = list(local_holiday = 0, 
+                            regional_holiday = 0, 
+                            national_holiday = 0)) %>% 
+  mutate(holiday = ifelse(local_holiday + regional_holiday + national_holiday > 0, 1, 0), 
+         store_nbr = factor(store_nbr), 
+         family = factor(family), 
+         cluster = factor(cluster), 
+         sales = log1p(sales)
+         ) %>% 
+  left_join(oil, by = "date") %>% 
+  left_join(sudden_drop, by = "date") %>% 
+  left_join(payday, by = "date") %>% 
+  group_by(id) %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = c(20:22, 27:29, 34:36, 41:43)
+    ) %>% 
+  ungroup() #%>% 
+  # lag_group_function()
+
+future_data <- data_merged %>% 
+  filter(is.na(sales))
+
+analysis_data <- data_merged %>% 
+  drop_na()
+
+```
+
+
+```{r include=FALSE}
+
+rm(analysis, data, data_merged)
+
+```
+
+
+## Model
+
+```{r}
+
+
+
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+# plot_time_series_cv_plan(cv_splits, .date_var = date, .value = sales)
+
+# splits <- analysis_data %>% 
+#   time_series_split(
+#     assess     = "2 months", 
+#     cumulative = TRUE
+#   )
+
+# train <- training(splits)
+# test <- testing(splits)
+
+rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
+    update_role(id, new_role = "id variable") %>% 
+    step_timeseries_signature(date) %>%
+    step_rm(date, contains(".iso"), contains("hour"), 
+            contains("minute"), contains("second")) %>%
+    step_normalize(onpromotion) %>% 
+    step_zv(all_predictors()) %>%
+    step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# baked <- rec %>% prep() %>% bake(new_data = NULL)
+
+xgb_model <- 
+  boost_tree(
+    trees = tune(), 
+    # mtry = tune(),
+    min_n = tune(),
+    learn_rate = tune(),
+    tree_depth = tune()
+  ) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("regression")
+
+xgb_wf <- workflow() %>%
+    add_model(xgb_model) %>%
+    add_recipe(rec) #%>%
+    # fit(data = training(cv_splits$splits[[1]])) %>%
+    # recursive(
+    #     transform  = lag_group_function,
+    #     train_tail = panel_tail(training(cv_splits$splits[[1]]), id, 15),
+    #     id = "id"
+    # )
+
+set.seed(2022)
+
+# parallel_start(4, .method = "parallel")
+
+xgb_tune <- tune_grid(
+  object = xgb_wf, 
+  resamples = cv_splits, 
+  param_info = parameters(xgb_wf),
+  grid = 6, 
+  control = control_grid(
+    verbose = TRUE, 
+    allow_par = FALSE, 
+    # parallel_over = "everything"
+  )
+)
+
+xgb_tune %>% 
+  show_best()
+
+# 
+# model_tbl <- modeltime_table(
+#     wflw_xgb
+# ) 
+# 
+# calib_tbl <- model_tbl %>% 
+#   modeltime_calibrate(
+#       new_data = testing(splits), 
+#       id       = "id"
+#     ) 
+# 
+# calib_tbl %>% 
+#   modeltime_accuracy(acc_by_id = TRUE) %>%
+#   table_modeltime_accuracy(.interactive = FALSE)
+# 
+# 
+# calib_tbl %>%
+#     modeltime_forecast(
+#         new_data    = testing(splits),
+#         actual_data = analysis_data,
+#         conf_by_id  = TRUE
+#     ) %>%
+#     group_by(id) %>%
+#     plot_modeltime_forecast(
+#         .facet_ncol  = 3,
+#         .interactive = FALSE
+#     )
+# 
+# refit_tbl <- calib_tbl %>%
+#   modeltime_refit(data = analysis_data)
+# 
+# future_forecast <- refit_tbl %>%
+#   modeltime_forecast(
+#     new_data    = future_data,
+#     actual_data = analysis_data, 
+#     conf_by_id  = TRUE
+#   ) #%>%
+#   # group_by(id) %>%
+#   # plot_modeltime_forecast(
+#   #   .interactive = F,
+#   #   .facet_ncol  = 2
+#   # )
+
+```
+

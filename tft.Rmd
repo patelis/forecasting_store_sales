@@ -1,0 +1,194 @@
+---
+title: "tft"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data
+
+```{r load_libraries}
+
+library(tidyverse)
+library(lubridate)
+library(timetk)
+library(tidymodels)
+library(modeltime)
+library(workflowsets)
+library(here)
+library(tft)
+
+```
+
+```{r load_data}
+
+analysis <- read_csv(here("data", "train.csv"))
+holdout <- read_csv(here("data", "test.csv"))
+stores <- read_csv(here("data", "stores.csv"))
+transactions <- read_csv(here("data", "transactions.csv"))
+holidays <- read_csv(here("data", "holidays_events.csv"))
+oil <- read_csv(here("data", "oil.csv"))
+
+```
+
+```{r merger}
+
+data <- bind_rows(analysis, holdout) %>% 
+  mutate(id = paste0(store_nbr, "__", family))
+
+lag_function <- function(data) {
+  
+  data %>% 
+    # group_by(id) %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = 1:15
+    ) #%>% 
+    # ungroup()
+  
+}
+
+lag_group_function <- function(data) {
+  
+  data %>% 
+    group_by(id) %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = 1:15
+    ) %>% 
+    ungroup()
+  
+}
+
+national_holidays <- holidays %>% 
+  filter(locale == "National", !transferred) %>% 
+  mutate(national_holiday = 1) %>% 
+  select(date, national_holiday) %>% 
+  unique()
+
+local_holidays <- holidays %>% 
+  filter(locale == "Local", !transferred) %>% 
+  mutate(local_holiday = 1) %>% 
+  select(date, local_holiday, locale_name) %>% 
+  unique()
+
+regional_holidays <- holidays %>% 
+  filter(locale == "Regional", !transferred) %>% 
+  mutate(regional_holiday = 1) %>% 
+  select(date, regional_holiday, locale_name) %>% 
+  unique()
+
+oil <- oil %>% 
+  pad_by_time(.date_var = date, .by = "day") %>% 
+  mutate(dcoilwtico = ts_impute_vec(dcoilwtico, period = 1))
+
+# sudden_drop <- data %>% 
+#   filter(family == "PRODUCE") %>% 
+#   group_by(date) %>% 
+#   summarise(sales = sum(sales), .groups = "drop") %>% 
+#   mutate(sudden_drop = ifelse(sales < 5000 | is.na(sales), 1, 0)) %>% 
+#   select(date, sudden_drop)
+
+sudden_drop <- data %>% 
+  select(date) %>% 
+  unique() %>% 
+  mutate(sudden_drop_1 = ifelse(date < as.Date("2014-03-01"), 1, 0), 
+         sudden_drop_2 = ifelse(date >= as.Date("2014-04-01") & date < as.Date("2014-07-01"), 1, 0), 
+         sudden_drop_3 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-03-31"), 1, 0), 
+         sudden_drop_4 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-03"), 1, 0), 
+         sudden_drop_5 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-31"), 1, 0), 
+         sudden_drop_6 = ifelse(date >= as.Date("2014-04-01") & date <= as.Date("2014-06-30"), 1, 0), 
+
+         sudden_drop_2014_feb = ifelse(date >= as.Date("2014-02-01") & date <= as.Date("2014-02-28"), 1, 0), 
+         sudden_drop_2014_aug = ifelse(date >= as.Date("2014-08-01") & date <= as.Date("2014-08-31"), 1, 0), 
+         
+         sudden_drop_2014_nyd = ifelse(date == as.Date("2014-01-01"), 1, 0), 
+         sudden_drop_2015_nyd = ifelse(date == as.Date("2015-01-01"), 1, 0), 
+         sudden_drop_2016_nyd = ifelse(date == as.Date("2016-01-01"), 1, 0), 
+         sudden_drop_2017_nyd = ifelse(date == as.Date("2017-01-01"), 1, 0), 
+         
+         sudden_drop_books = ifelse(date <= as.Date("2016-10-07"), 1, 0)
+         )
+
+payday <- data %>% 
+  select(date) %>% 
+  unique() %>% 
+  mutate(day_num = day(date), 
+         month_end = days_in_month(date), 
+         payday = ifelse(day_num == 15 | day_num == month_end, 1, 0)
+         ) %>% 
+  select(date, payday)
+
+data_merged <- data %>% 
+  left_join(stores, by = "store_nbr") %>% 
+  left_join(national_holidays, 
+            by = c("date" = "date")) %>% 
+  left_join(local_holidays, 
+            by = c("date" = "date", 
+                   "city" = "locale_name")) %>% 
+  left_join(regional_holidays, 
+            by = c("date" = "date", 
+                   "state" = "locale_name")) %>% 
+  replace_na(replace = list(local_holiday = 0, 
+                            regional_holiday = 0, 
+                            national_holiday = 0)) %>% 
+  mutate(holiday = ifelse(local_holiday + regional_holiday + national_holiday > 0, 1, 0), 
+         store_nbr = factor(store_nbr), 
+         family = factor(family), 
+         cluster = factor(cluster), 
+         sales = log1p(sales)
+         ) %>% 
+  left_join(oil, by = "date") %>% 
+  left_join(sudden_drop, by = "date") %>% 
+  left_join(payday, by = "date")
+
+future_data <- data_merged %>% 
+  filter(is.na(sales))
+
+analysis_data <- data_merged %>% 
+  drop_na()
+
+```
+
+```{r}
+
+data("vic_elec", package = "tsibbledata")
+vic_elec <- vic_elec[1:256,] %>% 
+  mutate(Location = as.factor("Victoria")) 
+
+vic_elec_split <- initial_time_split(vic_elec, prop=3/4, lag=96)
+  
+vic_elec_train <- training(vic_elec_split)
+vic_elec_test <- testing(vic_elec_split)
+
+rec <- recipe(Demand ~ ., data = vic_elec_train) %>%
+  update_role(Date, new_role="id") %>%
+  update_role(Time, new_role="time") %>%
+  update_role(Temperature, new_role="observed_input") %>%
+  update_role(Holiday, new_role="known_input") %>%
+  update_role(Location, new_role="static_input") %>%
+  step_normalize(all_numeric(), -all_outcomes())
+
+
+fit <- tft_fit(rec, vic_elec_train, epochs = 15, batch_size=100, total_time_steps=12, num_encoder_steps=10, verbose=T)
+
+
+fit_2 <- tft_fit(rec, vic_elec_train, epochs = 60, batch_size=100, tft_model = fit, total_time_steps=12, num_encoder_steps=10, verbose=T)
+
+fit_3 <- tft_fit(rec, vic_elec_train, epochs = 10, batch_size=100, total_time_steps=12, num_encoder_steps=10, verbose=T)
+
+fit_4 <- tft_fit(rec, vic_elec_train, epochs = 20, batch_size=100, loss = "smape_loss", total_time_steps=12, num_encoder_steps=10, verbose=T, device = "cpu")
+
+yhat <- predict(fit, rec, vic_elec_test)
+
+yhat_2 <- predict(fit_2, rec, vic_elec_test)
+
+yhat_3 <- predict(fit_3, rec, vic_elec_test)
+yhat_4 <- predict(fit_4, rec, vic_elec_test)
+
+
+```
+
