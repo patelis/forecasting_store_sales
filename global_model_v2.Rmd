@@ -1,0 +1,351 @@
+---
+title: "Global Models v2"
+author: "Konstantinos Patelis"
+date: "01/02/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data
+
+```{r load_libraries}
+
+library(tidyverse)
+library(lubridate)
+library(timetk)
+library(tidymodels)
+library(modeltime)
+library(workflowsets)
+library(here)
+library(vip)
+library(treesnip)
+
+```
+
+```{r load_data}
+
+analysis <- read_csv(here("data", "train.csv"))
+holdout <- read_csv(here("data", "test.csv"))
+stores <- read_csv(here("data", "stores.csv"))
+transactions <- read_csv(here("data", "transactions.csv"))
+holidays <- read_csv(here("data", "holidays_events.csv"))
+oil <- read_csv(here("data", "oil.csv"))
+
+```
+
+```{r merger}
+
+analysis <- analysis %>% 
+  select(-id) %>% 
+  group_by(store_nbr, family) %>% 
+  pad_by_time(.date_var = date, 
+              .by = "day") %>% 
+  ungroup() %>% 
+  replace_na(list(sales = 0, onpromotion = 0))
+
+data <- bind_rows(analysis, holdout %>% select(-id)) %>% 
+  mutate(id = paste0(store_nbr, "__", family))
+
+transactions <- transactions %>% 
+  group_by(store_nbr) %>% 
+  pad_by_time(.date_var = date, 
+              .by = "day", 
+              .start_date = "2013-01-01") %>% 
+  ungroup() %>% 
+  replace_na(list(transactions = 0))
+
+lag_function <- function(data) {
+  
+  data %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = 1:14
+    )
+  
+}
+
+lag_group_function <- function(data) {
+  
+  data %>% 
+    group_by(id) %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = 1:15
+    ) %>% 
+    ungroup()
+  
+}
+
+national_holidays <- holidays %>% 
+  filter(locale == "National", !transferred) %>% 
+  mutate(national_holiday = 1) %>% 
+  select(date, national_holiday) %>% 
+  unique()
+
+local_holidays <- holidays %>% 
+  filter(locale == "Local", !transferred) %>% 
+  mutate(local_holiday = 1) %>% 
+  select(date, local_holiday, locale_name) %>% 
+  unique()
+
+regional_holidays <- holidays %>% 
+  filter(locale == "Regional", !transferred) %>% 
+  mutate(regional_holiday = 1) %>% 
+  select(date, regional_holiday, locale_name) %>% 
+  unique()
+
+oil <- oil %>% 
+  pad_by_time(.date_var = date, .by = "day") %>% 
+  mutate(dcoilwtico = ts_impute_vec(dcoilwtico, period = 1))
+
+sudden_drop <- data %>% 
+  select(date) %>% 
+  unique() %>% 
+  mutate(sudden_drop_1 = ifelse(date < as.Date("2014-03-01"), 1, 0), 
+         sudden_drop_2 = ifelse(date >= as.Date("2014-04-01") & date < as.Date("2014-07-01"), 1, 0), 
+         sudden_drop_3 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-03-31"), 1, 0), 
+         sudden_drop_4 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-03"), 1, 0), 
+         sudden_drop_5 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-31"), 1, 0), 
+         sudden_drop_6 = ifelse(date >= as.Date("2014-04-01") & date <= as.Date("2014-06-30"), 1, 0), 
+
+         sudden_drop_2014_feb = ifelse(date >= as.Date("2014-02-01") & date <= as.Date("2014-02-28"), 1, 0), 
+         sudden_drop_2014_aug = ifelse(date >= as.Date("2014-08-01") & date <= as.Date("2014-08-31"), 1, 0), 
+         
+         sudden_drop_2014_nyd = ifelse(date == as.Date("2014-01-01"), 1, 0), 
+         sudden_drop_2015_nyd = ifelse(date == as.Date("2015-01-01"), 1, 0), 
+         sudden_drop_2016_nyd = ifelse(date == as.Date("2016-01-01"), 1, 0), 
+         sudden_drop_2017_nyd = ifelse(date == as.Date("2017-01-01"), 1, 0), 
+         
+         sudden_drop_books = ifelse(date <= as.Date("2016-10-07"), 1, 0)
+         )
+
+payday <- data %>% 
+  select(date) %>% 
+  unique() %>% 
+  mutate(day_num = day(date), 
+         month_end = days_in_month(date), 
+         payday = ifelse(day_num == 15 | day_num == month_end, 1, 0)
+         ) %>% 
+  select(date, payday)
+
+data_merged <- data %>% 
+  left_join(stores, by = "store_nbr") %>% 
+  # left_join(transactions, by = c("date", "store_nbr")) %>% 
+  left_join(national_holidays, 
+            by = c("date" = "date")) %>% 
+  left_join(local_holidays, 
+            by = c("date" = "date", 
+                   "city" = "locale_name")) %>% 
+  left_join(regional_holidays, 
+            by = c("date" = "date", 
+                   "state" = "locale_name")) %>% 
+  replace_na(replace = list(local_holiday = 0, 
+                            regional_holiday = 0, 
+                            national_holiday = 0)) %>% 
+  mutate(holiday = ifelse(local_holiday + regional_holiday + national_holiday > 0, 1, 0), 
+         store_nbr = factor(store_nbr), 
+         family = factor(family), 
+         cluster = factor(cluster), 
+         sales = log1p(sales)
+         ) %>% 
+  left_join(oil, by = "date") %>% 
+  left_join(sudden_drop, by = "date") %>% 
+  left_join(payday, by = "date") %>% 
+  group_by(id) %>% 
+    tk_augment_lags(
+      .value = sales,
+      .lags = c(20:22, 27:29, 34:36, 41:43)
+    ) %>% 
+  ungroup() 
+
+data_merged <- data_merged %>%
+  lag_group_function()
+
+future_data <- data_merged %>% 
+  filter(is.na(sales))
+
+analysis_data <- data_merged %>% 
+  drop_na()
+
+```
+
+```{r include=FALSE}
+
+rm(analysis, data, data_merged, holidays, national_holidays, oil, payday, regional_holidays, local_holidays, stores, sudden_drop, transactions)
+
+```
+
+## Seasonal Naive
+
+```{r snaive}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+train <- training(cv_splits$splits[[1]])
+test <- testing(cv_splits$splits[[1]])
+
+rec_snaive <-  recipe(sales ~ date + id, data = train)
+
+snaive_model <-
+  naive_reg(
+    id = "id",
+    seasonal_period = "1 year"
+  ) %>%
+  set_engine("snaive")
+
+snaive_wf <- workflow() %>%
+  add_model(snaive_model) %>%
+  add_recipe(rec_snaive)
+
+snaive_fit <- snaive_wf %>% 
+  fit(data = train)
+
+model_tbl <- modeltime_table(
+    snaive_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = test,
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+refit_tbl <- calib_tbl %>% 
+  modeltime_refit(data = analysis_data)
+
+snaive_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+```
+
+## Model XGB
+
+```{r}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
+    update_role(id, new_role = "id variable") %>% 
+    step_timeseries_signature(date) %>%
+    step_rm(date, contains(".iso"), contains("hour"), 
+            contains("minute"), contains("second")) %>%
+    step_normalize(onpromotion) %>% 
+    step_zv(all_predictors()) %>%
+    step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# baked <- rec %>% prep() %>% bake(new_data = NULL)
+
+xgb_model <-
+  boost_tree(
+    learn_rate = 0.015,
+    trees = tune(),
+    mtry = tune(),
+    tree_depth = tune(),
+    min_n = tune(), 
+    stop_iter = 50L
+  ) %>%
+  set_engine("xgboost", nthread = 10) %>%
+  set_mode("regression")
+
+xgb_wf <- workflow() %>%
+    add_model(xgb_model) %>%
+    add_recipe(rec)
+
+param_grid <-
+  grid_latin_hypercube(
+    trees(range = c(1000L, 2000L)), 
+    mtry(range = c(60L, 120L)), 
+    tree_depth(range = c(10L, 20L)),
+    min_n(range = c(2L, 40L)), 
+    size = 5
+  )
+
+set.seed(2022)
+
+# xgb_fit <- xgb_wf %>% fit(data = training(cv_splits$splits[[1]]))
+
+xgb_tune <- tune_grid(
+  object = xgb_wf, 
+  resamples = cv_splits, 
+  param_info = parameters(xgb_wf),
+  metrics = metric_set(rmse),
+  grid = param_grid, 
+  control = control_grid(verbose = TRUE)
+)
+
+# saveRDS(xgb_tune, file = "xgb_tune_20220201.Rds")
+
+best_xgb_params <- xgb_tune %>% 
+  select_best(metric = "rmse")
+
+xgb_wf <- finalize_workflow(xgb_wf, best_xgb_params)
+
+set.seed(123)
+
+xgb_fit <- xgb_wf %>% 
+  fit(data = training(cv_splits$splits[[1]]))
+
+model_tbl <- modeltime_table(
+    xgb_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = testing(cv_splits$splits[[1]]),
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+refit_tbl <- calib_tbl %>%
+  modeltime_refit(data = analysis_data)
+
+future_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+future_forecast_tidy <- future_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(future_forecast_tidy, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+    
+write_csv(holdout_pred, "submission_16.csv")
+
+```
