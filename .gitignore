@@ -27,4 +27,6 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 # RDS files
-.Rds
+*.Rds
+# Ignore submission csv files
+*.csv
