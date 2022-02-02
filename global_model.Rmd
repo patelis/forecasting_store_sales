@@ -18,6 +18,8 @@ library(tidymodels)
 library(modeltime)
 library(workflowsets)
 library(here)
+library(vip)
+library(treesnip)
 
 ```
 
@@ -34,18 +36,155 @@ oil <- read_csv(here("data", "oil.csv"))
 
 ```{r merger}
 
-data <- bind_rows(analysis, holdout) %>% 
+# data <- bind_rows(analysis, holdout) %>% 
+#   mutate(id = paste0(store_nbr, "__", family))
+# 
+# lag_function <- function(data) {
+#   
+#   data %>% 
+#     # group_by(id) %>% 
+#     tk_augment_lags(
+#       .value = sales,
+#       .lags = 1:14
+#     ) #%>% 
+#     # ungroup()
+#   
+# }
+# 
+# lag_group_function <- function(data) {
+#   
+#   data %>% 
+#     group_by(id) %>% 
+#     tk_augment_lags(
+#       .value = sales,
+#       .lags = 1:15
+#     ) %>% 
+#     ungroup()
+#   
+# }
+# 
+# national_holidays <- holidays %>% 
+#   filter(locale == "National", !transferred) %>% 
+#   mutate(national_holiday = 1) %>% 
+#   select(date, national_holiday) %>% 
+#   unique()
+# 
+# local_holidays <- holidays %>% 
+#   filter(locale == "Local", !transferred) %>% 
+#   mutate(local_holiday = 1) %>% 
+#   select(date, local_holiday, locale_name) %>% 
+#   unique()
+# 
+# regional_holidays <- holidays %>% 
+#   filter(locale == "Regional", !transferred) %>% 
+#   mutate(regional_holiday = 1) %>% 
+#   select(date, regional_holiday, locale_name) %>% 
+#   unique()
+# 
+# oil <- oil %>% 
+#   pad_by_time(.date_var = date, .by = "day") %>% 
+#   mutate(dcoilwtico = ts_impute_vec(dcoilwtico, period = 1))
+# 
+# sudden_drop <- data %>% 
+#   select(date) %>% 
+#   unique() %>% 
+#   mutate(sudden_drop_1 = ifelse(date < as.Date("2014-03-01"), 1, 0), 
+#          sudden_drop_2 = ifelse(date >= as.Date("2014-04-01") & date < as.Date("2014-07-01"), 1, 0), 
+#          sudden_drop_3 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-03-31"), 1, 0), 
+#          sudden_drop_4 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-03"), 1, 0), 
+#          sudden_drop_5 = ifelse(date >= as.Date("2015-01-01") & date <= as.Date("2015-05-31"), 1, 0), 
+#          sudden_drop_6 = ifelse(date >= as.Date("2014-04-01") & date <= as.Date("2014-06-30"), 1, 0), 
+# 
+#          sudden_drop_2014_feb = ifelse(date >= as.Date("2014-02-01") & date <= as.Date("2014-02-28"), 1, 0), 
+#          sudden_drop_2014_aug = ifelse(date >= as.Date("2014-08-01") & date <= as.Date("2014-08-31"), 1, 0), 
+#          
+#          sudden_drop_2014_nyd = ifelse(date == as.Date("2014-01-01"), 1, 0), 
+#          sudden_drop_2015_nyd = ifelse(date == as.Date("2015-01-01"), 1, 0), 
+#          sudden_drop_2016_nyd = ifelse(date == as.Date("2016-01-01"), 1, 0), 
+#          sudden_drop_2017_nyd = ifelse(date == as.Date("2017-01-01"), 1, 0), 
+#          
+#          sudden_drop_books = ifelse(date <= as.Date("2016-10-07"), 1, 0)
+#          )
+# 
+# payday <- data %>% 
+#   select(date) %>% 
+#   unique() %>% 
+#   mutate(day_num = day(date), 
+#          month_end = days_in_month(date), 
+#          payday = ifelse(day_num == 15 | day_num == month_end, 1, 0)
+#          ) %>% 
+#   select(date, payday)
+# 
+# data_merged <- data %>% 
+#   left_join(stores, by = "store_nbr") %>% 
+#   left_join(transactions, by = c("date", "store_nbr")) %>% 
+#   left_join(national_holidays, 
+#             by = c("date" = "date")) %>% 
+#   left_join(local_holidays, 
+#             by = c("date" = "date", 
+#                    "city" = "locale_name")) %>% 
+#   left_join(regional_holidays, 
+#             by = c("date" = "date", 
+#                    "state" = "locale_name")) %>% 
+#   replace_na(replace = list(local_holiday = 0, 
+#                             regional_holiday = 0, 
+#                             national_holiday = 0)) %>% 
+#   mutate(holiday = ifelse(local_holiday + regional_holiday + national_holiday > 0, 1, 0), 
+#          store_nbr = factor(store_nbr), 
+#          family = factor(family), 
+#          cluster = factor(cluster), 
+#          sales = log1p(sales)
+#          ) %>% 
+#   left_join(oil, by = "date") %>% 
+#   left_join(sudden_drop, by = "date") %>% 
+#   left_join(payday, by = "date") %>% 
+#   group_by(id) %>% 
+#     tk_augment_lags(
+#       .value = sales,
+#       .lags = c(20:22, 27:29, 34:36, 41:43)
+#     ) %>% 
+#   ungroup() 
+# 
+# data_merged <- data_merged %>%
+#   lag_group_function()
+# 
+# future_data <- data_merged %>% 
+#   filter(is.na(sales))
+# 
+# analysis_data <- data_merged %>% 
+#   drop_na()
+
+```
+
+
+```{r merger_padder}
+
+analysis <- analysis %>% 
+  select(-id) %>% 
+  group_by(store_nbr, family) %>% 
+  pad_by_time(.date_var = date, 
+              .by = "day") %>% 
+  ungroup() %>% 
+  replace_na(list(sales = 0, onpromotion = 0))
+
+data <- bind_rows(analysis, holdout %>% select(-id)) %>% 
   mutate(id = paste0(store_nbr, "__", family))
+
+transactions <- transactions %>% 
+  group_by(store_nbr) %>% 
+  pad_by_time(.date_var = date, 
+              .by = "day", 
+              .start_date = "2013-01-01") %>% 
+  ungroup() %>% 
+  replace_na(list(transactions = 0))
 
 lag_function <- function(data) {
   
   data %>% 
-    # group_by(id) %>% 
     tk_augment_lags(
       .value = sales,
-      .lags = 1:15
-    ) #%>% 
-    # ungroup()
+      .lags = 1:14
+    )
   
 }
 
@@ -83,13 +222,6 @@ oil <- oil %>%
   pad_by_time(.date_var = date, .by = "day") %>% 
   mutate(dcoilwtico = ts_impute_vec(dcoilwtico, period = 1))
 
-# sudden_drop <- data %>% 
-#   filter(family == "PRODUCE") %>% 
-#   group_by(date) %>% 
-#   summarise(sales = sum(sales), .groups = "drop") %>% 
-#   mutate(sudden_drop = ifelse(sales < 5000 | is.na(sales), 1, 0)) %>% 
-#   select(date, sudden_drop)
-
 sudden_drop <- data %>% 
   select(date) %>% 
   unique() %>% 
@@ -122,6 +254,7 @@ payday <- data %>%
 
 data_merged <- data %>% 
   left_join(stores, by = "store_nbr") %>% 
+  # left_join(transactions, by = c("date", "store_nbr")) %>% 
   left_join(national_holidays, 
             by = c("date" = "date")) %>% 
   left_join(local_holidays, 
@@ -147,8 +280,10 @@ data_merged <- data %>%
       .value = sales,
       .lags = c(20:22, 27:29, 34:36, 41:43)
     ) %>% 
-  ungroup() #%>% 
-  # lag_group_function()
+  ungroup() 
+
+data_merged <- data_merged %>%
+  lag_group_function()
 
 future_data <- data_merged %>% 
   filter(is.na(sales))
@@ -158,20 +293,15 @@ analysis_data <- data_merged %>%
 
 ```
 
-
 ```{r include=FALSE}
 
-rm(analysis, data, data_merged)
+rm(analysis, data, data_merged, holidays, national_holidays, oil, payday, regional_holidays, local_holidays, stores, sudden_drop, transactions)
 
 ```
 
-
-## Model
+## Model XGB
 
 ```{r}
-
-
-
 
 cv_splits <- analysis_data %>% 
   time_series_cv(
@@ -182,19 +312,9 @@ cv_splits <- analysis_data %>%
     slice_limit = 5
   )
 
-# plot_time_series_cv_plan(cv_splits, .date_var = date, .value = sales)
-
-# splits <- analysis_data %>% 
-#   time_series_split(
-#     assess     = "2 months", 
-#     cumulative = TRUE
-#   )
-
-# train <- training(splits)
-# test <- testing(splits)
-
 rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
     update_role(id, new_role = "id variable") %>% 
+    update_role(transactions, new_role = "other variable") %>% 
     step_timeseries_signature(date) %>%
     step_rm(date, contains(".iso"), contains("hour"), 
             contains("minute"), contains("second")) %>%
@@ -204,88 +324,1558 @@ rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>%
 
 # baked <- rec %>% prep() %>% bake(new_data = NULL)
 
-xgb_model <- 
+xgb_model <-
   boost_tree(
-    trees = tune(), 
-    # mtry = tune(),
-    min_n = tune(),
+    trees = 1000,
+    mtry = tune(),
     learn_rate = tune(),
-    tree_depth = tune()
-  ) %>% 
-  set_engine("xgboost") %>% 
+    tree_depth = tune(),
+    stop_iter = 50L
+  ) %>%
+  set_engine("xgboost", nthread = 10) %>%
   set_mode("regression")
+
+# xgb_model <-
+#   boost_tree() %>%
+#   set_engine("xgboost", nthread = 10) %>%
+#   set_mode("regression")
 
 xgb_wf <- workflow() %>%
     add_model(xgb_model) %>%
-    add_recipe(rec) #%>%
-    # fit(data = training(cv_splits$splits[[1]])) %>%
-    # recursive(
-    #     transform  = lag_group_function,
-    #     train_tail = panel_tail(training(cv_splits$splits[[1]]), id, 15),
-    #     id = "id"
-    # )
+    add_recipe(rec)
+
+# naive_model <- 
+#   naive_reg(
+#     id = "id",
+#     seasonal_period = NULL
+#   ) %>% 
+#   set_engine("naive")
+# 
+# mean_model <- 
+#   window_reg(
+#     id = "id", 
+#     window_size = 15
+#   ) %>% 
+#   set_engine(
+#     engine = "window_function",
+#     # Create a Weighted Average
+#     window_function = mean,
+#   )
+
+# rec_simple <- recipe(sales ~ date + id, data = training(cv_splits$splits[[1]])) 
+
+# naive_wf <- workflow() %>% 
+#   add_model(naive_model) %>% 
+#   add_recipe(rec_simple)
+
+# mean_wf <- workflow() %>% 
+#   add_model(mean_model) %>% 
+#   add_recipe(rec_simple)
+
+param_grid <-
+  grid_latin_hypercube(
+    mtry(range = c(60L, 80L)), 
+    learn_rate(range = c(-5, -1)),
+    tree_depth(range = c(8L, 15L)),
+    size = 5
+  )
 
 set.seed(2022)
 
-# parallel_start(4, .method = "parallel")
+xgb_fit <- xgb_wf %>% fit(data = training(cv_splits$splits[[1]]))
 
 xgb_tune <- tune_grid(
   object = xgb_wf, 
   resamples = cv_splits, 
   param_info = parameters(xgb_wf),
-  grid = 6, 
-  control = control_grid(
-    verbose = TRUE, 
-    allow_par = FALSE, 
-    # parallel_over = "everything"
-  )
+  metrics = metric_set(rmse),
+  grid = param_grid, 
+  control = control_grid(verbose = TRUE)
 )
 
-xgb_tune %>% 
-  show_best()
+# saveRDS(xgb_tune, file = "xgb_tune_20220120.Rds")
 
+# xgb_tune <- readRDS("xgb_tune2.Rds")
+
+best_xgb_params <- xgb_tune %>% 
+  select_best(metric = "rmse")
+
+xgb_final <- finalize_workflow(xgb_wf, best_xgb_params)
+
+set.seed(123)
+
+xgb_fit <- xgb_final %>% 
+  fit(data = training(cv_splits$splits[[1]]))
+
+# naive_fit <- naive_wf %>% 
+#   fit(data = training(cv_splits$splits[[1]]))
 # 
-# model_tbl <- modeltime_table(
-#     wflw_xgb
-# ) 
+# mean_fit <- mean_wf %>% 
+#   fit(data = training(cv_splits$splits[[1]]))
+
+# saveRDS(xgb_fit, file = "xgb_model_20220120.Rds")
+
+# xgb_fit <- readRDS("xgb_model2.Rds")
+
+model_tbl <- modeltime_table(
+    xgb_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = testing(cv_splits$splits[[1]]),
+      id       = "id"
+    )
+
+# test <- calib_tbl %>%
+#   modeltime_accuracy(acc_by_id = TRUE) %>% 
+#   select(.model_desc, id, rmse) %>% 
+#   pivot_wider(names_from = ".model_desc", values_from = "rmse")
 # 
-# calib_tbl <- model_tbl %>% 
-#   modeltime_calibrate(
-#       new_data = testing(splits), 
-#       id       = "id"
-#     ) 
-# 
-# calib_tbl %>% 
-#   modeltime_accuracy(acc_by_id = TRUE) %>%
-#   table_modeltime_accuracy(.interactive = FALSE)
-# 
-# 
-# calib_tbl %>%
-#     modeltime_forecast(
-#         new_data    = testing(splits),
-#         actual_data = analysis_data,
-#         conf_by_id  = TRUE
-#     ) %>%
-#     group_by(id) %>%
-#     plot_modeltime_forecast(
-#         .facet_ncol  = 3,
-#         .interactive = FALSE
-#     )
-# 
-# refit_tbl <- calib_tbl %>%
-#   modeltime_refit(data = analysis_data)
-# 
-# future_forecast <- refit_tbl %>%
+# test2 <- calib_tbl %>% 
 #   modeltime_forecast(
-#     new_data    = future_data,
-#     actual_data = analysis_data, 
+#     new_data    = testing(cv_splits$splits[[1]]),
+#     actual_data = analysis_data,
 #     conf_by_id  = TRUE
-#   ) #%>%
-#   # group_by(id) %>%
-#   # plot_modeltime_forecast(
-#   #   .interactive = F,
-#   #   .facet_ncol  = 2
-#   # )
+#   )
+# 
+# test2 %>% 
+#   filter(id == "50__SCHOOL AND OFFICE SUPPLIES") %>% 
+#   plot_modeltime_forecast()
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+test_forecast <- calib_tbl %>%
+  modeltime_forecast(
+    new_data    = test,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+test_forecast %>% 
+  filter(id == "50__SCHOOL AND OFFICE SUPPLIES") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+refit_tbl <- calib_tbl %>%
+  modeltime_refit(data = analysis_data)
+
+# saveRDS(refit_tbl, file = "xgb_refit_20220120.Rds")
+
+future_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+# saveRDS(future_forecast, file = "forecast4.Rds")
+
+future_forecast %>%
+  filter(id == "47__SCHOOL AND OFFICE SUPPLIES") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+future_forecast_tidy <- future_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(future_forecast_tidy, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+    
+write_csv(holdout_pred, "submission_16.csv")
 
 ```
 
+```{r}
+
+zero_ids <- zeroes %>%  
+  pull(id) %>% 
+  unique()
+
+future_forecast_tidy <- forecast4 %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value) %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  mutate(sales = ifelse(check %in% zero_ids, 0, sales))
+
+```
+
+```{r replace_zero_ts}
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_id) %>% 
+  pull(id)
+
+submission_x <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(submission_x, "submission_10.csv")
+
+```
+
+## Seasonal Naive
+
+```{r}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+train <- training(cv_splits$splits[[1]])
+test <- testing(cv_splits$splits[[1]])
+
+snaive_model <- 
+  naive_reg(id = "id", 
+            seasonal_period = "1 year") %>% 
+  set_engine("snaive") %>% 
+  set_mode("regression")
+
+snaive_fit <- snaive_model %>% 
+  fit(sales ~ date + id, data = train)
+
+model_tbl <- modeltime_table(
+    snaive_fit, 
+    xgb_recursive_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = test,
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>% 
+  group_by(id) %>% 
+  filter(rmse == min(rmse)) %>% 
+  ungroup() %>% 
+  View()
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+test_forecast <- calib_tbl %>%
+  modeltime_forecast(
+    new_data    = test,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+test_forecast %>% 
+  filter(id == "42__BOOKS") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+
+```
+
+
+## Model XGB - no sales lags
+
+```{r}
+
+# zeroes <- analysis_data %>% 
+#   group_by(id) %>% 
+#   summarise(sales = sum(sales), .groups = "drop") %>% 
+#   filter(sales == 0)
+# 
+# zero_id <- zeroes %>% 
+#   pull(id)
+# 
+# analysis_data <- analysis_data %>% 
+#   filter(!(id %in% zero_id))
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
+    update_role(id, new_role = "id variable") %>% 
+    update_role(transactions, new_role = "other variable") %>% 
+    step_timeseries_signature(date) %>%
+    step_rm(contains("sales_lag"), date, contains(".iso"), contains("hour"), 
+            contains("minute"), contains("second")) %>%
+    step_normalize(onpromotion) %>% 
+    step_zv(all_predictors()) %>%
+    step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# baked <- rec %>% prep() %>% bake(new_data = NULL)
+
+# xgb_model <-
+#   boost_tree(
+#     trees = 1000,
+#     mtry = tune(),
+#     learn_rate = tune(),
+#     tree_depth = tune(),
+#     stop_iter = 50L
+#   ) %>%
+#   set_engine("xgboost", nthread = 10) %>%
+#   set_mode("regression")
+
+xgb_model <-
+  boost_tree() %>%
+  set_engine("xgboost", nthread = 10) %>%
+  set_mode("regression")
+
+xgb_wf <- workflow() %>%
+    add_model(xgb_model) %>%
+    add_recipe(rec)
+
+# naive_model <- 
+#   naive_reg(
+#     id = "id",
+#     seasonal_period = NULL
+#   ) %>% 
+#   set_engine("naive")
+# 
+# mean_model <- 
+#   window_reg(
+#     id = "id", 
+#     window_size = 15
+#   ) %>% 
+#   set_engine(
+#     engine = "window_function",
+#     # Create a Weighted Average
+#     window_function = mean,
+#   )
+
+# rec_simple <- recipe(sales ~ date + id, data = training(cv_splits$splits[[1]])) 
+
+# naive_wf <- workflow() %>% 
+#   add_model(naive_model) %>% 
+#   add_recipe(rec_simple)
+
+# mean_wf <- workflow() %>% 
+#   add_model(mean_model) %>% 
+#   add_recipe(rec_simple)
+
+param_grid <-
+  grid_latin_hypercube(
+    mtry(range = c(10L, 80L)), 
+    learn_rate(range = c(-5, -1)),
+    tree_depth(range = c(5L, 15L)),
+    size = 5
+  )
+
+set.seed(2022)
+
+xgb_fit <- xgb_wf %>% fit(data = training(cv_splits$splits[[1]]))
+
+xgb_tune <- tune_grid(
+  object = xgb_wf, 
+  resamples = cv_splits, 
+  param_info = parameters(xgb_wf),
+  metrics = metric_set(rmse),
+  grid = param_grid, 
+  control = control_grid(verbose = TRUE)
+)
+
+# saveRDS(xgb_tune, file = "xgb_tune_20220120.Rds")
+
+# xgb_tune <- readRDS("xgb_tune2.Rds")
+
+best_xgb_params <- xgb_tune %>% 
+  select_best(metric = "rmse")
+
+xgb_final <- finalize_workflow(xgb_wf, best_xgb_params)
+
+set.seed(123)
+
+xgb_fit <- xgb_final %>% 
+  fit(data = training(cv_splits$splits[[1]]))
+
+# naive_fit <- naive_wf %>% 
+#   fit(data = training(cv_splits$splits[[1]]))
+# 
+# mean_fit <- mean_wf %>% 
+#   fit(data = training(cv_splits$splits[[1]]))
+
+# saveRDS(xgb_fit, file = "xgb_model_20220120.Rds")
+
+# xgb_fit <- readRDS("xgb_model2.Rds")
+
+model_tbl <- modeltime_table(
+    xgb_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = testing(cv_splits$splits[[1]]),
+      id       = "id"
+    )
+
+# test <- calib_tbl %>%
+#   modeltime_accuracy(acc_by_id = TRUE) %>% 
+#   select(.model_desc, id, rmse) %>% 
+#   pivot_wider(names_from = ".model_desc", values_from = "rmse")
+# 
+# test2 <- calib_tbl %>% 
+#   modeltime_forecast(
+#     new_data    = testing(cv_splits$splits[[1]]),
+#     actual_data = analysis_data,
+#     conf_by_id  = TRUE
+#   )
+# 
+# test2 %>% 
+#   filter(id == "50__SCHOOL AND OFFICE SUPPLIES") %>% 
+#   plot_modeltime_forecast()
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+test_forecast <- calib_tbl %>%
+  modeltime_forecast(
+    new_data    = test,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+test_forecast %>% 
+  filter(id == "50__SCHOOL AND OFFICE SUPPLIES") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+refit_tbl <- calib_tbl %>%
+  modeltime_refit(data = analysis_data)
+
+# saveRDS(refit_tbl, file = "xgb_refit_20220120.Rds")
+
+future_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+# saveRDS(future_forecast, file = "forecast4.Rds")
+
+future_forecast %>%
+  filter(id == "47__SCHOOL AND OFFICE SUPPLIES") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+future_forecast_tidy <- future_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(future_forecast_tidy, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+    
+write_csv(holdout_pred, "submission_16.csv")
+
+```
+
+```{r}
+
+zero_ids <- zeroes %>%  
+  pull(id) %>% 
+  unique()
+
+future_forecast_tidy <- forecast4 %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value) %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  mutate(sales = ifelse(check %in% zero_ids, 0, sales))
+
+```
+
+```{r replace_zero_ts}
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_id) %>% 
+  pull(id)
+
+submission_x <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(submission_x, "submission_10.csv")
+
+```
+
+
+## Model XGB Recursive
+
+```{r}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
+    update_role(id, new_role = "id variable") %>% 
+    update_role(transactions, new_role = "other variable") %>% 
+    step_timeseries_signature(date) %>%
+    step_rm(date, contains(".iso"), contains("hour"), 
+            contains("minute"), contains("second")) %>%
+    step_normalize(onpromotion) %>% 
+    step_zv(all_predictors()) %>%
+    step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# baked <- rec %>% prep() %>% bake(new_data = NULL)
+
+xgb_model <-
+  boost_tree(
+    trees = 1000,
+    mtry = tune(),
+    learn_rate = tune(),
+    tree_depth = tune(),
+    stop_iter = 50L
+  ) %>%
+  set_engine("xgboost", nthread = 10) %>%
+  set_mode("regression")
+
+xgb_wf <- workflow() %>%
+    add_model(xgb_model) %>%
+    add_recipe(rec)
+
+param_grid <-
+  grid_latin_hypercube(
+    mtry(range = c(60L, 233L)),  #80
+    learn_rate(range = c(-2.5, -1)),
+    tree_depth(range = c(8L, 20L)),
+    size = 5
+  )
+
+set.seed(2022)
+
+# xgb_fit <- xgb_wf %>% fit(data = training(cv_splits$splits[[1]]))
+
+xgb_tune <- tune_grid(
+  object = xgb_wf, 
+  resamples = cv_splits, 
+  param_info = parameters(xgb_wf),
+  metrics = metric_set(rmse),
+  grid = param_grid, 
+  control = control_grid(verbose = TRUE)
+)
+
+# saveRDS(xgb_tune, file = "xgb_tune_20220122.Rds")
+
+# # A tibble: 5 x 9
+#    mtry tree_depth learn_rate .metric .estimator  mean     n std_err .config             
+#   <int>      <int>      <dbl> <chr>   <chr>      <dbl> <int>   <dbl> <chr>               
+# 1   144         13  0.0201    rmse    standard   0.371     5 0.00260 Preprocessor1_Model2
+
+# 
+# Slice1   144         13   0.0201   rmse    standard       0.370 Preprocessor1_Model2
+#  7 Slice2   144         13   0.0201   rmse    standard       0.377 Preprocessor1_Model2
+#  8 Slice3   144         13   0.0201   rmse    standard       0.361 Preprocessor1_Model2
+#  9 Slice4   144         13   0.0201   rmse    standard       0.373 Preprocessor1_Model2
+# 10 Slice5   144         13   0.0201   rmse    standard       0.373 Preprocessor1_Model2
+
+# xgb_tune <- readRDS("xgb_tune_20220122.Rds")
+
+best_xgb_params <- xgb_tune %>% 
+  select_best(metric = "rmse")
+
+xgb_wf <- finalize_workflow(xgb_wf, best_xgb_params)
+
+set.seed(123)
+
+train <- training(cv_splits$splits[[1]])
+
+xgb_fit <- xgb_wf %>% 
+  fit(data = train) %>% 
+  recursive(
+        id = "id",
+        transform  = lag_group_function,
+        train_tail = panel_tail(train, id, 15)
+    )
+
+# saveRDS(xgb_fit, file = "xgb_model_20220122.Rds")
+
+xgb_fit <- readRDS("xgb_model_20220122.Rds")
+
+model_tbl <- modeltime_table(
+    xgb_fit
+)
+
+test <- testing(cv_splits$splits[[1]])
+
+# rm(rec, cv_splits, xgb_tune)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = test,
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+test_forecast <- calib_tbl %>%
+  modeltime_forecast(
+    new_data    = test,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+test_forecast %>% 
+  filter(id == "19__GROCERY II") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+xgb_fit %>% 
+  extract_fit_engine() %>% 
+  vip::vip(num_features = 20L, geom = "point")
+
+refit_tbl <- calib_tbl %>%
+  modeltime_refit(data = analysis_data)
+
+# saveRDS(refit_tbl, file = "xgb_refit_20220122.Rds")
+
+future_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+# saveRDS(future_forecast, file = "forecast4.Rds")
+
+future_forecast %>%
+  filter(id == "47__SCHOOL AND OFFICE SUPPLIES") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+future_forecast_tidy <- future_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(future_forecast_tidy, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+    
+write_csv(holdout_pred, "submission_17.csv")
+
+```
+
+```{r}
+
+zero_ids <- zeroes %>%  
+  pull(id) %>% 
+  unique()
+
+future_forecast_tidy <- forecast4 %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value) %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  mutate(sales = ifelse(check %in% zero_ids, 0, sales))
+
+```
+
+```{r replace_zero_ts}
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_ids) %>% 
+  pull(id)
+
+submission_x <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(submission_x, "submission_18.csv")
+```
+
+## XGB no lags
+
+```{r}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
+    update_role(id, new_role = "id variable") %>% 
+    update_role(transactions, new_role = "other variable") %>% 
+    step_timeseries_signature(date) %>%
+    step_rm(contains("sales_lag"), date, contains(".iso"), contains("hour"), 
+            contains("minute"), contains("second")) %>%
+    step_normalize(onpromotion) %>% 
+    step_zv(all_predictors()) %>%
+    step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# baked <- rec %>% prep() %>% bake(new_data = NULL)
+
+xgb_model <-
+  boost_tree(
+    trees = 1000,
+    mtry = tune(),
+    learn_rate = tune(),
+    tree_depth = tune(),
+    stop_iter = 50L
+  ) %>%
+  set_engine("xgboost", nthread = 10) %>%
+  set_mode("regression")
+
+xgb_wf <- workflow() %>%
+    add_model(xgb_model) %>%
+    add_recipe(rec)
+
+# naive_model <- 
+#   naive_reg(
+#     id = "id",
+#     seasonal_period = NULL
+#   ) %>% 
+#   set_engine("naive")
+# 
+# mean_model <- 
+#   window_reg(
+#     id = "id", 
+#     window_size = 15
+#   ) %>% 
+#   set_engine(
+#     engine = "window_function",
+#     # Create a Weighted Average
+#     window_function = mean,
+#   )
+
+# rec_simple <- recipe(sales ~ date + id, data = training(cv_splits$splits[[1]])) 
+
+# naive_wf <- workflow() %>% 
+#   add_model(naive_model) %>% 
+#   add_recipe(rec_simple)
+
+# mean_wf <- workflow() %>% 
+#   add_model(mean_model) %>% 
+#   add_recipe(rec_simple)
+
+param_grid <-
+  grid_latin_hypercube(
+    mtry(range = c(60L, 80L)),  #80
+    learn_rate(range = c(-2.5, -1)),
+    tree_depth(range = c(8L, 15L)),
+    size = 5
+  )
+
+set.seed(2022)
+
+# xgb_fit <- xgb_wf %>% fit(data = training(cv_splits$splits[[1]]))
+
+xgb_tune <- tune_grid(
+  object = xgb_wf, 
+  resamples = cv_splits, 
+  param_info = parameters(xgb_wf),
+  metrics = metric_set(rmse),
+  grid = param_grid, 
+  control = control_grid(verbose = TRUE)
+)
+
+# saveRDS(xgb_tune, file = "xgb_tune_no_lags_20220123.Rds")
+
+# # A tibble: 5 x 9
+#    mtry tree_depth learn_rate .metric .estimator  mean     n std_err .config             
+#   <int>      <int>      <dbl> <chr>   <chr>      <dbl> <int>   <dbl> <chr>               
+# 1    62         13    0.0139  rmse    standard   0.420     5 0.00383 Preprocessor1_Model1
+# 2    64         15    0.00960 rmse    standard   0.424     5 0.00367 Preprocessor1_Model2
+# 3    78         11    0.0461  rmse    standard   0.393     5 0.00304 Preprocessor1_Model3 # This also looks very good, especially for slice 1 (most recent)
+# 4    72          9    0.00385 rmse    standard   0.729     5 0.0173  Preprocessor1_Model4
+# 5    70         10    0.0989  rmse    standard   0.391     5 0.00404 Preprocessor1_Model5 
+
+
+best_xgb_params <- xgb_tune %>% 
+  select_best(metric = "rmse")
+
+xgb_wf <- finalize_workflow(xgb_wf, best_xgb_params)
+
+set.seed(123)
+
+# train <- training(cv_splits$splits[[1]])
+
+xgb_fit <- xgb_wf %>% 
+  fit(data = training(cv_splits$splits[[1]]))
+
+# saveRDS(xgb_fit, file = "xgb_model_no_lags_20220123.Rds")
+
+# xgb_fit <- readRDS("xgb_model_20220122.Rds")
+
+model_tbl <- modeltime_table(
+    xgb_fit
+)
+
+test <- testing(cv_splits$splits[[1]])
+
+# rm(rec, cv_splits, xgb_tune)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = testing(cv_splits$splits[[1]]),
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+test_forecast <- calib_tbl %>%
+  modeltime_forecast(
+    new_data    = test,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+test_forecast %>% 
+  filter(id == "38__HOME AND KITCHEN II") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+xgb_fit %>% 
+  extract_fit_engine() %>% 
+  vip::vip(num_features = 50L, geom = "point")
+
+refit_tbl <- calib_tbl %>%
+  modeltime_refit(data = analysis_data)
+
+# saveRDS(refit_tbl, file = "xgb_refit_no_lags_20220123.Rds")
+
+future_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+# saveRDS(future_forecast, file = "forecast4.Rds")
+
+future_forecast %>%
+  filter(id == "47__SCHOOL AND OFFICE SUPPLIES") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+future_forecast_tidy <- future_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(future_forecast_tidy, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+    
+write_csv(holdout_pred, "submission_19.csv")
+
+```
+
+```{r}
+
+zero_ids <- zeroes %>%  
+  pull(id) %>% 
+  unique()
+
+```
+
+```{r replace_zero_ts}
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_ids) %>% 
+  pull(id)
+
+submission_x <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(submission_x, "submission_20.csv")
+```
+
+## Model LGBM Recursive
+
+```{r}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
+    update_role(id, new_role = "id variable") %>% 
+    update_role(transactions, new_role = "other variable") %>% 
+    step_timeseries_signature(date) %>%
+    step_rm(date, contains(".iso"), contains("hour"), 
+            contains("minute"), contains("second")) %>%
+    step_normalize(onpromotion) %>% 
+    step_zv(all_predictors()) #%>%
+    # step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# baked <- rec %>% prep() %>% bake(new_data = NULL)
+
+lgbm_model <-
+  boost_tree(
+    trees = 1000,
+    mtry = tune(),
+    learn_rate = tune(),
+    tree_depth = tune(),
+    stop_iter = 50L
+  ) %>%
+  set_engine("lightgbm", nthread = 10) %>%
+  set_mode("regression")
+
+lgbm_wf <- workflow() %>%
+    add_model(lgbm_model) %>%
+    add_recipe(rec)
+
+param_grid <-
+  grid_latin_hypercube(
+    mtry(range = c(60L, 80L)),  #80
+    learn_rate(range = c(-5, -1)),
+    tree_depth(range = c(8L, 15L)),
+    size = 5
+  )
+
+set.seed(2025)
+
+# lgbm_fit <- lgbm_wf %>% fit(data = training(cv_splits$splits[[1]]))
+
+lgbm_tune <- tune_grid(
+  object = lgbm_wf, 
+  resamples = cv_splits, 
+  param_info = parameters(lgbm_wf),
+  metrics = metric_set(rmse),
+  grid = param_grid, 
+  control = control_grid(verbose = TRUE)
+)
+
+# saveRDS(lgbm_tune, file = "lgbm_tune_20220128.Rds")
+
+lgbm_tune %>% collect_metrics(summarize = FALSE) %>% View()
+lgbm_tune %>% autoplot()
+
+best_lgbm_params <- lgbm_tune %>% 
+  select_best(metric = "rmse")
+
+lgbm_wf <- finalize_workflow(lgbm_wf, best_lgbm_params)
+
+train <- training(cv_splits$splits[[1]])
+test <- testing(cv_splits$splits[[1]])
+# rm(rec, cv_splits)
+
+set.seed(4242)
+
+lgbm_fit <- lgbm_wf %>% 
+  fit(data = train) %>% 
+  recursive(
+        id = "id",
+        transform  = lag_group_function,
+        train_tail = panel_tail(train, id, 15)
+    )
+
+# lightgbm::saveRDS.lgb.Booster(object = lgbm_fit, file = "lgbm_model_20220128_lgbm_save.Rds", raw = TRUE)
+
+# pull_lightgbm <-  extract_fit_parsnip(lgbm_fit)
+
+# lgb.save(pull_lightgbm$fit, "lightgbm.model")
+# saveRDS(lgbm_fit, file = "lgbm_model_20220128.Rds")
+
+# lgbm_fit <- readRDS("lgbm_model_20220128.Rds")
+# model_lgb <- lightgbm::lgb.load("lightgbm.model")
+# lgbm_fit$fit$fit$fit <- model_lgb
+
+lgbm_fit %>% extract_fit_engine() %>% lightgbm::lgb.importance() %>% lightgbm::lgb.plot.importance()
+
+model_tbl <- modeltime_table(
+    lgbm_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = test,
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = FALSE) %>% 
+  table_modeltime_accuracy(.interactive = TRUE)
+
+refit_tbl <- calib_tbl %>%
+  modeltime_refit(data = analysis_data)
+
+# saveRDS(refit_tbl, file = "lgbm_refit_20220129_all.Rds")
+# lightgbm::saveRDS.lgb.Booster(object = refit_tbl$.model[[1]] %>% extract_fit_engine(), file = "lgbm_refit_20220129.Rds", raw = TRUE)
+
+future_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+# saveRDS(future_forecast, file = "lgbm_recursive_forecast_20220129.Rds")
+
+future_forecast_tidy <- future_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(future_forecast_tidy, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+    
+write_csv(holdout_pred, "submission_34.csv")
+
+```
+
+```{r}
+
+zeroes <- analysis_data %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  filter(sales == 0) %>% 
+  mutate(id = paste0(store_nbr, "__", family))
+
+zero_ids <- zeroes %>%  
+  pull(id) %>% 
+  unique()
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_ids) %>% 
+  pull(id)
+
+submission_x <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(submission_x, "submission_35.csv")
+```
+
+## Model LGBM no lags
+
+```{r}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+rec <-  recipe(sales ~ ., data = training(cv_splits$splits[[1]])) %>% 
+    update_role(id, new_role = "id variable") %>% 
+    update_role(transactions, new_role = "other variable") %>% 
+    step_timeseries_signature(date) %>%
+    step_rm(contains("sales_lag"), date, contains(".iso"), contains("hour"), 
+            contains("minute"), contains("second")) %>%
+    step_normalize(onpromotion) %>% 
+    step_zv(all_predictors()) #%>%
+    # step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# baked <- rec %>% prep() %>% bake(new_data = NULL)
+
+lgbm_model <-
+  boost_tree(
+    trees = 1000,
+    mtry = tune(),
+    learn_rate = tune(),
+    tree_depth = tune(),
+    stop_iter = 50L
+  ) %>%
+  set_engine("lightgbm", nthread = 10) %>%
+  set_mode("regression")
+
+lgbm_wf <- workflow() %>%
+    add_model(lgbm_model) %>%
+    add_recipe(rec)
+
+param_grid <-
+  grid_latin_hypercube(
+    mtry(range = c(60L, 80L)),  #80
+    learn_rate(range = c(-5, -1)),
+    tree_depth(range = c(8L, 15L)),
+    size = 5
+  )
+
+set.seed(5050)
+
+lgbm_tune <- tune_grid(
+  object = lgbm_wf, 
+  resamples = cv_splits, 
+  param_info = parameters(lgbm_wf),
+  metrics = metric_set(rmse),
+  grid = param_grid, 
+  control = control_grid(verbose = TRUE)
+)
+
+# saveRDS(lgbm_tune, file = "lgbm_tune_unlagged_20220129.Rds")
+
+# lgbm_tune <- readRDS("lgbm_tune_unlagged_20220129.Rds")
+
+lgbm_tune %>% collect_metrics(summarize = FALSE) %>% View()
+lgbm_tune %>% autoplot()
+
+best_lgbm_params <- lgbm_tune %>% 
+  select_best(metric = "rmse")
+
+lgbm_wf <- finalize_workflow(lgbm_wf, best_lgbm_params)
+
+train <- training(cv_splits$splits[[1]])
+test <- testing(cv_splits$splits[[1]])
+# rm(rec, cv_splits)
+
+set.seed(4242)
+
+lgbm_fit <- lgbm_wf %>% 
+  fit(data = train)
+
+# saveRDS(lgbm_fit, file = "lgbm_unlagged_fit_20220129.Rds")
+# lightgbm::saveRDS.lgb.Booster(object = lgbm_fit %>% extract_fit_engine(), file = "lgbm_unlagged_fit_20220129_model_only.Rds", raw = TRUE)
+
+# lgbm_fit <- readRDS("lgbm_model_20220128.Rds")
+# model_lgb <- lightgbm::lgb.load("lightgbm.model")
+# lgbm_fit$fit$fit$fit <- model_lgb
+
+# lgbm_importance <- lgbm_fit %>% extract_fit_engine() %>% lightgbm::lgb.importance() %>% lightgbm::lgb.plot.importance()
+
+model_tbl <- modeltime_table(
+    lgbm_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = test,
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>% 
+  table_modeltime_accuracy(.interactive = TRUE)
+
+refit_tbl <- calib_tbl %>%
+  modeltime_refit(data = analysis_data)
+
+# saveRDS(refit_tbl, file = "lgbm_unlagged_refit_20220129_all.Rds")
+# lightgbm::saveRDS.lgb.Booster(object = refit_tbl$.model[[1]] %>% extract_fit_engine(), file = "lgbm_unlagged_refit_20220129.Rds", raw = TRUE)
+
+future_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+saveRDS(future_forecast, file = "lgbm_unlagged_forecast_20220129.Rds")
+
+future_forecast_tidy <- future_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(future_forecast_tidy, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+    
+write_csv(holdout_pred, "submission_39.csv")
+
+```
+
+```{r}
+
+zeroes <- analysis_data %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  filter(sales == 0) %>% 
+  mutate(id = paste0(store_nbr, "__", family))
+
+zero_ids <- zeroes %>%  
+  pull(id) %>% 
+  unique()
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_ids) %>% 
+  pull(id)
+
+submission_x <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(submission_x, "submission_40.csv")
+```
+
+## Combine models
+
+```{r model_forecasts}
+
+# xgb_recursive_forecast <- readRDS("best_models/xgb_recursive_forecast.Rds")
+# xgb_no_lags_forecast <- readRDS("best_models/xgb_no_lags_forecast.Rds")
+# lgbm_recursive_forecast <- readRDS("lgbm_recursive_forecast_20220129.Rds")
+
+best_ids_model1 <- best_models_by_id %>% 
+  filter(.model_id == 1) %>% 
+  pull(id)
+
+best_ids_model2 <- best_models_by_id %>% 
+  filter(.model_id == 2) %>% 
+  pull(id)
+
+model1_forecasts <- xgb_recursive_forecast %>% 
+  filter(id %in% best_ids_model1)
+
+model2_forecasts <- xgb_no_lags_forecast %>% 
+  filter(id %in% best_ids_model2)
+
+best_forecasts <- bind_rows(model1_forecasts, model2_forecasts)
+
+best_forecasts <- best_forecasts %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(best_forecasts, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+
+zero_ids <- analysis_data %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  filter(sales == 0) %>% 
+  mutate(id = paste0(store_nbr, "__", family)) %>%  
+  pull(id) %>% 
+  unique()
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_ids) %>% 
+  pull(id)
+
+holdout_pred <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+    
+write_csv(holdout_pred, "submission_25.csv")
+
+```
+
+```{r mean_forecast}
+
+mean_forecast <- 
+  bind_rows(
+    xgb_recursive_forecast %>% filter(.key == "prediction"), 
+    xgb_no_lags_forecast %>% filter(.key == "prediction")
+  ) %>% 
+  group_by(id, .index) %>% 
+  summarise(.value = mean(.value), .groups = "drop") %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = TRUE, convert = TRUE) %>% 
+  select(date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(mean_forecast, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+
+zero_ids <- analysis_data %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  filter(sales == 0) %>% 
+  mutate(id = paste0(store_nbr, "__", family)) %>%  
+  pull(id) %>% 
+  unique()
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_ids) %>% 
+  pull(id)
+
+holdout_pred <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(holdout_pred, "submission_26.csv")
+
+```
+
+```{r weighted_mean_forecast}
+
+# xgb_recursive_forecast <- readRDS("best_models/xgb_recursive_forecast.Rds")
+# xgb_no_lags_forecast <- readRDS("best_models/xgb_no_lags_forecast.Rds")
+# lgbm_recursive_forecast <- readRDS("lgbm_recursive_forecast_20220129.Rds")
+# lgbm_no_lags_forecast <- readRDS("lgbm_unlagged_forecast_20220129.Rds")
+
+weight_1 <- .5
+weight_2 <- .5
+weight_3 <- 0
+weight_4 <- 0
+
+wmean_forecast <- 
+  bind_rows(
+    xgb_recursive_forecast %>% filter(.key == "prediction") %>% mutate(.value = weight_1 * .value), 
+    xgb_no_lags_forecast %>% filter(.key == "prediction") %>% mutate(.value = weight_2 * .value), 
+    lgbm_recursive_forecast %>% filter(.key == "prediction") %>% mutate(.value = weight_3 * .value), 
+    lgbm_no_lags_forecast %>% filter(.key == "prediction") %>% mutate(.value = weight_4 * .value)
+  ) %>% 
+  group_by(id, .index) %>% 
+  summarise(.value = sum(.value), .groups = "drop") %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = FALSE, convert = TRUE) %>% 
+  select(id, date = .index, store_nbr, family, sales = .value)
+
+holdout_pred <- holdout %>% 
+  left_join(wmean_forecast, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+
+zero_ids <- analysis_data %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  filter(sales == 0) %>% 
+  mutate(id = paste0(store_nbr, "__", family)) %>%  
+  pull(id) %>% 
+  unique()
+
+check <- holdout %>% 
+  mutate(check = paste0(store_nbr, "__", family)) %>% 
+  filter(check %in% zero_ids) %>% 
+  pull(id)
+
+holdout_pred <- holdout_pred %>% 
+  mutate(sales = ifelse(id %in% check, 0, sales))
+
+write_csv(holdout_pred, "submission_43.csv")
+
+```
+
+## Seasonal Naive
+
+```{r}
+
+cv_splits <- analysis_data %>% 
+  time_series_cv(
+    date_var = date, 
+    assess = "15 days", 
+    skip = "15 days", 
+    cumulative = TRUE, 
+    slice_limit = 5
+  )
+
+train <- training(cv_splits$splits[[1]])
+test <- testing(cv_splits$splits[[1]])
+
+rec_snaive <-  recipe(sales ~ date + id, data = train)
+
+snaive_model <-
+  naive_reg(
+    id = "id",
+    seasonal_period = "1 year"
+  ) %>%
+  set_engine("snaive")
+
+snaive_wf <- workflow() %>%
+  add_model(snaive_model) %>%
+  add_recipe(rec_snaive)
+
+snaive_fit <- snaive_wf %>% 
+  fit(data = train)
+
+model_tbl <- modeltime_table(
+    snaive_fit
+)
+
+calib_tbl <- model_tbl %>%
+  modeltime_calibrate(
+      new_data = test,
+      id       = "id"
+    )
+
+calib_tbl %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+test_forecast <- calib_tbl %>%
+  modeltime_forecast(
+    new_data    = test,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+test_forecast %>% 
+  filter(id == "19__SCHOOL AND OFFICE SUPPLIES") %>% 
+  # group_by(id) %>%
+  plot_modeltime_forecast(
+    .interactive = TRUE,
+    # .facet_ncol  = 6, 
+  )
+
+refit_tbl <- calib_tbl %>% 
+  modeltime_refit(data = analysis_data)
+
+snaive_forecast <- refit_tbl %>%
+  modeltime_forecast(
+    new_data    = future_data,
+    actual_data = analysis_data,
+    conf_by_id  = TRUE
+  )
+
+# saveRDS(snaive_forecast, file = "snaive_365_forecast_20220201.Rds")
+
+```
+
+
+## Combine forecast files
+
+```{r}
+
+# xgb_recursive_forecast <- readRDS("best_models/xgb_recursive_forecast.Rds")
+# xgb_no_lags_forecast <- readRDS("best_models/xgb_no_lags_forecast.Rds")
+# lgbm_recursive_forecast <- readRDS("lgbm_recursive_forecast_20220129.Rds")
+# lgbm_no_lags_forecast <- readRDS("lgbm_unlagged_forecast_20220129.Rds")
+# snaive_363_forecast <- readRDS("snaive_363_forecast_20220130.Rds")
+# snaive_365_forecast <- readRDS("snaive_365_forecast_20220201.Rds")
+
+forecasts <- xgb_recursive_forecast %>% 
+  bind_rows(xgb_no_lags_forecast %>% filter(.key == "prediction"), 
+            # lgbm_recursive_forecast %>% filter(.key == "prediction"), 
+            # lgbm_no_lags_forecast %>% filter(.key == "prediction"),
+            # snaive_363_forecast %>% filter(.key == "prediction"),
+            # snaive_362_forecast %>% filter(.key == "prediction"),
+            # snaive_364_forecast %>% filter(.key == "prediction"),
+            snaive_365_forecast %>% filter(.key == "prediction"),
+            # snaive_360_forecast %>% filter(.key == "prediction"),
+            # snaive_359_forecast %>% filter(.key == "prediction")
+            ) #%>% 
+  # filter(!(id %in% zero_ids))
+
+zero_prop <- forecasts %>% 
+  filter(.model_desc == "ACTUAL") %>% 
+  group_by(id) %>% 
+  mutate(zero_prop = sum(.value == 0) / n()) %>% 
+  select(id, zero_prop) %>% 
+  unique()
+
+zero_filter <- zero_prop %>% 
+  filter(zero_prop > .9) %>% 
+  pull(id)
+
+forecasts %>% 
+  filter(id == "18__AUTOMOTIVE") %>% 
+  # filter_by_time(.date_var = .index, .start_date = "2016-08-15") %>%
+  plot_modeltime_forecast(.conf_interval_show = FALSE)
+
+
+forecasts %>% 
+  filter(id == "18__AUTOMOTIVE", .model_desc == "ACTUAL") %>% 
+  filter_by_time(.date_var = .index, .start_date = "2016-08-15") %>% 
+  count()
+
+# 0.693147181
+# 1.098612289
+
+```
+
+```{r xgb_with_naive}
+
+# 0.9 proportion of zeroes
+
+snaive_forecast_tidy <- snaive_365_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = FALSE, convert = TRUE) %>% 
+  select(id, date = .index, store_nbr, family, sales_naive = .value)
+
+final_forecast <- xgb_recursive_forecast %>% 
+  separate(col = "id", sep = "__", into = c("store_nbr", "family"), remove = FALSE, convert = TRUE) %>% 
+  select(id, date = .index, store_nbr, family, sales = .value) 
+
+final_forecast <- final_forecast %>% 
+  left_join(snaive_forecast_tidy, by = c("id", "date", "store_nbr", "family")) %>% 
+  mutate(sales = ifelse(id %in% zero_filter, sales_naive, sales)) %>% 
+  select(-id, sales_naive)
+
+final_forecast <- wmean_forecast %>% 
+  left_join(snaive_forecast_tidy, by = c("id", "date", "store_nbr", "family")) %>% 
+  mutate(sales = ifelse(id %in% zero_filter, sales_naive, sales)) %>% 
+  select(-id, sales_naive)
+
+holdout_pred <- holdout %>% 
+  left_join(final_forecast, 
+            by = c("date", 
+                   "family", 
+                   "store_nbr")) %>% 
+  select(id, sales) %>% 
+  mutate(sales = exp(sales) - 1)
+
+write_csv(holdout_pred, "submission_53.csv")
+
+```

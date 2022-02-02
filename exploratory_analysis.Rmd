@@ -359,3 +359,44 @@ analysis_merged <- analysis %>%
 
 ```
 
+#### Low Sales
+
+```{r}
+
+zeroes <- analysis_data %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(sales = sum(sales), .groups = "drop") %>% 
+  filter(sales == 0) %>% 
+  mutate(id = paste0(store_nbr, "__", family))
+
+```
+
+```{r zero_proportion}
+
+zero_prop <- analysis_data %>% 
+  mutate(id = paste0(store_nbr, "__", family)) %>% 
+  group_by(id) %>% 
+  mutate(zero_prop = sum(sales == 0) / n())
+
+```
+
+
+```{r}
+
+analysis_data %>% 
+  filter(id == "19__SCHOOL AND OFFICE SUPPLIES") %>% 
+  plot_time_series(
+    .date_var = date,
+    .value = sales, 
+    .smooth = FALSE
+  )
+
+analysis_data %>% 
+  filter(id == "25__BABY CARE") %>% 
+  plot_time_series(
+    .date_var = date,
+    .value = sales, 
+    .smooth = FALSE
+  )
+
+```
